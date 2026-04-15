@@ -1,0 +1,208 @@
+# ============================================
+# 1. IMPORT LIBRARIES
+# ============================================
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+
+# ============================================
+# 2. LOAD DATA
+# ============================================
+df = pd.read_csv("/content/NYC.csv")
+
+# ============================================
+# 3. DROP UNUSED FEATURES (NO LEAKAGE)
+# ============================================
+df = df.drop(columns=['store_and_fwd_flag', 'dropoff_datetime'])
+
+# ============================================
+# 4. FEATURE ENGINEERING
+# ============================================
+
+df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'])
+
+df['pickup_hour'] = df['pickup_datetime'].dt.hour
+df['pickup_day'] = df['pickup_datetime'].dt.dayofweek
+df['pickup_month'] = df['pickup_datetime'].dt.month
+
+df = df.drop(columns=['pickup_datetime'])
+
+# ============================================
+# 4.1 OUTLIER REMOVAL (VERY IMPORTANT)
+# ============================================
+
+df = df[(df['trip_duration'] > 60) & (df['trip_duration'] < 3600)]
+
+# ============================================
+# 4.2 TARGET TRANSFORMATION (FIX SKEW)
+# ============================================
+
+df['trip_duration'] = np.log1p(df['trip_duration'])
+
+# --------------------------------------------
+# Distance Calculation (Haversine Formula)
+# --------------------------------------------
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2)**2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+
+df['distance_km'] = haversine(
+    df['pickup_latitude'],
+    df['pickup_longitude'],
+    df['dropoff_latitude'],
+    df['dropoff_longitude']
+)
+
+# ============================================
+# 5. DEFINE FEATURES & TARGET
+# ============================================
+X = df.drop(columns=['trip_duration', 'id'])
+y = df['trip_duration']
+# ============================================
+# 6. TRAIN-VALIDATION-TEST SPLIT
+# ============================================
+
+# First split: Train (70%) and Temp (30%)
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X, y, test_size=0.3, random_state=42
+)
+
+# Second split: Validation (15%) and Test (15%)
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp, y_temp, test_size=0.5, random_state=42
+)
+
+print("Train size:", X_train.shape)
+print("Validation size:", X_val.shape)
+print("Test size:", X_test.shape)
+
+# ============================================
+# 7. RANDOM FOREST MODEL
+# ============================================
+rf = RandomForestRegressor(
+    n_estimators=80,
+    max_depth=10,
+    min_samples_split=10,
+    random_state=42,
+    n_jobs=-1
+)
+
+rf.fit(X_train, y_train)
+
+# Predictions
+y_train_pred_rf = rf.predict(X_train)
+y_val_pred_rf = rf.predict(X_val)
+y_test_pred_rf = rf.predict(X_test)
+
+# ============================================
+# 8. XGBOOST MODEL
+# ============================================
+xgb = XGBRegressor(
+    n_estimators=150,
+    learning_rate=0.08,
+    max_depth=6,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    tree_method='hist',
+    random_state=42
+)
+
+xgb.fit(
+    X_train, y_train,
+    eval_set=[(X_val, y_val)],
+    verbose=False
+)
+
+y_train_pred_xgb = xgb.predict(X_train)
+y_val_pred_xgb = xgb.predict(X_val)
+y_test_pred_xgb = xgb.predict(X_test)
+
+# ============================================
+# 9. EVALUATION FUNCTION
+# ============================================
+def evaluate(y_true, y_pred, model_name):
+
+    # reverse log transform
+    y_true_exp = np.expm1(y_true)
+    y_pred_exp = np.expm1(y_pred)
+
+    rmse = np.sqrt(mean_squared_error(y_true_exp, y_pred_exp))
+    mae = mean_absolute_error(y_true_exp, y_pred_exp)
+    r2 = r2_score(y_true_exp, y_pred_exp)
+
+    print(f"\n {model_name}")
+    print(f"RMSE: {rmse:.2f}")
+    print(f"MAE : {mae:.2f}")
+    print(f"R²  : {r2:.4f}")
+
+    return rmse, mae, r2
+
+print("\n--- RANDOM FOREST ---")
+evaluate(y_train, rf.predict(X_train), "RF Train")
+evaluate(y_val, rf.predict(X_val), "RF Validation")
+evaluate(y_test, rf.predict(X_test), "RF Test")
+
+print("\n--- XGBOOST ---")
+evaluate(y_train, xgb.predict(X_train), "XGB Train")
+evaluate(y_val, xgb.predict(X_val), "XGB Validation")
+evaluate(y_test, xgb.predict(X_test), "XGB Test")
+# ============================================
+# 10. VISUALIZATION
+# ============================================
+
+# --- Actual vs Predicted ---
+plt.figure()
+plt.scatter(y_test[:1000], y_test_pred_rf[:1000], alpha=0.5)
+plt.xlabel("Actual")
+plt.ylabel("Predicted")
+plt.title("Random Forest: Actual vs Predicted")
+plt.show()
+
+plt.figure()
+plt.scatter(y_test[:1000], y_test_pred_xgb[:1000], alpha=0.5)
+plt.xlabel("Actual")
+plt.ylabel("Predicted")
+plt.title("XGBoost: Actual vs Predicted")
+plt.show()
+
+# --- Error Distribution ---
+rf_errors = y_test - y_test_pred_rf
+xgb_errors = y_test - y_test_pred_xgb
+
+plt.figure()
+plt.hist(rf_errors, bins=50)
+plt.title("Random Forest Error Distribution")
+plt.show()
+
+plt.figure()
+plt.hist(xgb_errors, bins=50)
+plt.title("XGBoost Error Distribution")
+plt.show()
+
+# ============================================
+# 11. FEATURE IMPORTANCE
+# ============================================
+
+# Random Forest Feature Importance
+importances_rf = pd.Series(rf.feature_importances_, index=X.columns)
+importances_rf.sort_values().plot(kind='barh')
+plt.title("Random Forest Feature Importance")
+plt.show()
+
+# XGBoost Feature Importance
+importances_xgb = pd.Series(xgb.feature_importances_, index=X.columns)
+importances_xgb.sort_values().plot(kind='barh')
+plt.title("XGBoost Feature Importance")
+plt.show()
