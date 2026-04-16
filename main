@@ -129,26 +129,3 @@ print("\n XGBOOST ")
 evaluate(y_train, xgb.predict(X_train), "XGB Train")
 evaluate(y_val, xgb.predict(X_val), "XGB Val")
 evaluate(y_test, xgb.predict(X_test), "XGB Test")
-
-
-import seaborn as sns
-
-# Plot distribution of trip_duration (log scale)
-plt.figure()
-sns.histplot(df['trip_duration'], bins=50, kde=True)
-plt.title("Distribution of Trip Duration (Log Transformed)")
-plt.xlabel("Trip Duration (log)")
-plt.ylabel("Frequency")
-plt.show()
-
-
-print("Skewness:", df['trip_duration'].skew())
-
-
-plt.figure(figsize=(10, 8))
-# Drop the 'id' column before calculating correlation as it's non-numeric
-corr = df.drop(columns=['id']).corr()
-
-sns.heatmap(corr, cmap='coolwarm', annot=False)
-plt.title("Feature Correlation Heatmap")
-plt.show()
